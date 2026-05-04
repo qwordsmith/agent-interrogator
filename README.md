@@ -61,7 +61,7 @@ from agent_interrogator import AgentInterrogator, InterrogationConfig, LLMConfig
 config = InterrogationConfig(
     llm=LLMConfig(
         provider=ModelProvider.OPENAI,
-        model_name="gpt-4",
+        model_name="gpt-4.1",
         api_key="your-openai-api-key"
     ),
     max_iterations=5
@@ -132,14 +132,14 @@ pip install -e .[dev]
 ### Requirements
 
 - **Python**: 3.9 or higher
-- **OpenAI API Key**: For using GPT models (optional, can use HuggingFace instead)
+- **OpenAI API Key**: For using GPT models (optional, can use Ollama or any OpenAI-compatible endpoint instead)
 - **Dependencies**: Automatically installed with pip
 
 ---
 
 ## Configuration
 
-Agent Interrogator supports using either OpenAI or local models for analyzing agent responses:
+Agent Interrogator supports OpenAI, a local Ollama daemon, or any OpenAI-compatible endpoint (vLLM, LM Studio, LocalAI, etc.) for analyzing agent responses:
 
 ### OpenAI Configuration
 
@@ -149,7 +149,7 @@ from agent_interrogator import InterrogationConfig, LLMConfig, ModelProvider, Ou
 config = InterrogationConfig(
     llm=LLMConfig(
         provider=ModelProvider.OPENAI,
-        model_name="gpt-4",
+        model_name="gpt-4.1",
         api_key="your-openai-api-key"
     ),
     max_iterations=5,  # Maximum discovery cycles
@@ -157,23 +157,57 @@ config = InterrogationConfig(
 )
 ```
 
-### Local Model (HuggingFace) Configuration
+> **Optional:** pass `openai=OpenAIConfig(timeout=180.0)` on `LLMConfig` if you
+> want to override the OpenAI client's default request timeout. Provider parity
+> with `OllamaConfig` and `OpenAICompatibleConfig`, which both expose `timeout`.
+
+> **Newer OpenAI reasoning models (gpt-5.x, o1, o3, o4):** auto-detected by
+> name prefix — the library omits its default `temperature=0.1` for these so
+> they fall back to the only value they accept (1.0). No config changes
+> needed. To force a temperature anyway (or override for any model), pass
+> `model_kwargs={"temperature": ...}` on `LLMConfig`.
+
+### Ollama Configuration (local models)
 
 ```python
-from agent_interrogator import HuggingFaceConfig
+from agent_interrogator import OllamaConfig
 
 config = InterrogationConfig(
     llm=LLMConfig(
-        provider=ModelProvider.HUGGINGFACE,
-        model_name="mistralai/Mistral-7B-v0.1",  # Any HF model
-        huggingface=HuggingFaceConfig(
-            device="auto",  # auto, cpu, cuda, mps
-            quantization="fp16",  # fp16, int8, or None
-            allow_download=True
+        provider=ModelProvider.OLLAMA,
+        model_name="llama3.2:latest",  # Any model pulled into your Ollama daemon
+        ollama=OllamaConfig(
+            host="http://localhost:11434",
+            timeout=120.0,
+            options={"temperature": 0.1, "top_p": 0.9},
+            keep_alive="5m",
         )
     ),
     max_iterations=5,
     output_mode=OutputMode.VERBOSE
+)
+```
+
+### OpenAI-Compatible Endpoint Configuration
+
+Use this for any server that exposes an OpenAI-shaped Chat Completions API
+(vLLM, LM Studio, LocalAI, custom gateways, etc.).
+
+```python
+from agent_interrogator import OpenAICompatibleConfig
+
+config = InterrogationConfig(
+    llm=LLMConfig(
+        provider=ModelProvider.OPENAI_COMPATIBLE,
+        model_name="local-model",
+        openai_compatible=OpenAICompatibleConfig(
+            base_url="http://localhost:8000/v1",
+            api_key="not-required",  # Some endpoints ignore this
+            timeout=120.0,
+        )
+    ),
+    max_iterations=5,
+    output_mode=OutputMode.STANDARD
 )
 ```
 
@@ -263,20 +297,38 @@ profile = await interrogator.interrogate()
 
 # Iterate through capabilities
 for capability in profile.capabilities:
-    print(f"Capability: {capability.name}")
+    print(f"Capability: {capability.name}  [{capability.node_id}]")
     print(f"Description: {capability.description}")
-    
+
     for function in capability.functions:
-        print(f"  Function: {function.name}")
+        print(f"  Function: {function.name}  [{function.node_id}]")
         print(f"  Description: {function.description}")
         print(f"  Return Type: {function.return_type}")
-        
+
         for param in function.parameters:
             print(f"    Parameter: {param.name}")
             print(f"    Type: {param.type}")
             print(f"    Required: {param.required}")
             print(f"    Default: {param.default}")
 ```
+
+### Identity & Deduplication
+
+Each `Capability` and `Function` carries a stable, content-addressed `node_id`
+(`cap_<sha1[:12]>` / `fn_<sha1[:12]>`) derived from a normalized form of its
+name and — for functions — its parameter signature and return type.
+
+The interrogation loop UPSERTs by `node_id`: when the target re-describes a
+tool across cycles (often with slightly different wording), the entries are
+merged into a single record rather than appended as duplicates. Field-level
+merge keeps the richer description, unions parameter lists by `(name, type)`,
+and treats `required=True` as sticky. The loop also short-circuits once a
+cycle produces no new or updated entries.
+
+Stable `node_id`s mean profiles can be diffed across runs (or across agent
+versions) by joining on identity, and lay the groundwork for a forthcoming
+graph-backed storage mode analogous to BloodHound's
+`MERGE`-by-`ObjectIdentifier` ingestion.
 
 ### Security Research Applications
 
@@ -325,9 +377,10 @@ flake8 src/ tests/
 agent-interrogator/
 ├── src/agent_interrogator/    # Main package
 │   ├── __init__.py           # Public API
-│   ├── interrogator.py       # Core interrogation logic
+│   ├── interrogator.py       # Core interrogation loop (UPSERT by node_id)
 │   ├── config.py             # Configuration models
 │   ├── llm.py                # LLM provider interfaces
+│   ├── merge.py              # Field-level UPSERT helpers
 │   ├── models.py             # Data models (AgentProfile, etc.)
 │   ├── output.py             # Terminal output management
 │   └── prompt_templates.py   # LLM prompts

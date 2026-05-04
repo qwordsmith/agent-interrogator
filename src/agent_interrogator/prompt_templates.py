@@ -50,77 +50,104 @@ Your objective is to learn of any tools, functions, APIs, or methods that are no
 
 # LLM processing templates
 DISCOVERY_PROCESSING_SYSTEM_PROMPT = (
-    "You are an expert at identifying and categorizing the capabilities of AI agents."
+    "You are an expert at identifying and categorizing the capabilities of AI agents. "
+    "You emit ONLY structured JSON describing add/update operations against an "
+    "evolving capability catalog."
 )
 
 DISCOVERY_PROCESSING_PROMPT_TEMPLATE = """
 Analyze the following agent response and extract structured information about the AI agent's capabilities.
 Focus on identifying capabilities that would be supported by tools, functions, APIs, or feature sets that the agent has access to going beyond generic LLM capabilities.
-Below you will find the agent's response, the full context of the conversation, and the JSON schema that the output MUST follow.
-If the agent is being unhelpful, evasive, or providing incomplete/incorrect information, suggest prompting techniques that may help us get the information we're looking for in the next_cycle_focus value of your json output.
-Make sure to watch out for and avoid listing capabilities that are already known. Also watch out for and avoid listing capabilities that are hallucinations.
-Lastly, if you have confidence that you have identified all the capabilities, set is_complete to True.
+
+You will produce a list of OPERATIONS against an evolving capability catalog:
+- Use op="add" for capabilities NOT already present in the known list below.
+- Use op="update" with the matching `id` to refine or expand a capability that IS already in the known list (e.g., a fuller description, a renamed entry).
+- DO NOT re-add a capability that already exists; emit an update operation referencing its id instead.
+- Watch out for hallucinations; only record capabilities that are clearly tool/function/API/feature-backed.
+- If the agent is being unhelpful or evasive, suggest prompting techniques in `next_cycle_focus`.
+- If you are confident every capability has been identified, set `is_complete` to true.
+
+Known capabilities (use these IDs when emitting op="update"):
+{known_capabilities}
 
 Agent Response:
 {response}
-
-Full Context:
-{context}
 
 Format the output as JSON following this schema:
 {json_format}
 """
 
 DISCOVERY_JSON_SCHEMA = r"""{
-    "capabilities": [{
-        "name": "capability name",
-        "description": "detailed description"
-    }],
+    "operations": [
+        {
+            "op": "add",
+            "name": "capability name",
+            "description": "detailed description"
+        },
+        {
+            "op": "update",
+            "id": "cap_xxxxxxxxxxxx",
+            "description": "refined or expanded description"
+        }
+    ],
     "is_complete": false,
     "next_cycle_focus": "guidance for what aspects to explore in the next cycle."
 }"""
 
-ANALYSIS_PROCESSING_SYSTEM_PROMPT = "You are an expert at analyzing and documenting the tools, functions, methods and APIs available to an AI agent you are interrogating, including details such as parameters and return types."
+ANALYSIS_PROCESSING_SYSTEM_PROMPT = (
+    "You are an expert at analyzing and documenting the tools, functions, methods and "
+    "APIs available to an AI agent you are interrogating, including details such as "
+    "parameters and return types. You emit ONLY structured JSON describing add/update "
+    "operations against an evolving function catalog."
+)
 
 ANALYSIS_PROCESSING_PROMPT_TEMPLATE = """
 Analyze the following agent response and extract structured information about the tool calls/functions used to support the '{capability_name}' capability.
 Focus on accurately capturing function names, descriptions, parameters, and return types.
-Below you will find the agent's response, the full context of the conversation, and the JSON schema that the output MUST follow.
-If the agent is being unhelpful, evasive, or providing incomplete/incorrect information, suggest prompting techniques that may help us get the information we're looking for in the next_cycle_focus value of your json output.
-Make sure to watch out for and avoid listing functions that are already known. Also watch out for and avoid listing functions that are hallucinations.
-Lastly, if you have confidence that you have identified all the functions and their details, set is_complete to True.
+
+You will produce a list of OPERATIONS against the evolving function catalog for this capability:
+- Use op="add" for functions NOT already present in the known list below.
+- Use op="update" with the matching `id` to refine an existing function — e.g., supplying a fuller description, additional parameters, or a previously-missing return type. The merge is field-level, so partial updates are fine.
+- DO NOT re-add a function that already exists; emit an update operation referencing its id instead.
+- Watch out for hallucinated functions; only record functions the agent has actually demonstrated or clearly described.
+- If the agent is being unhelpful or evasive, suggest prompting techniques in `next_cycle_focus`.
+- If you are confident every function has been identified for this capability, set `is_complete` to true.
+
+Known functions for this capability (use these IDs when emitting op="update"):
+{known_functions}
 
 Agent Response:
 {response}
-
-Full Context:
-{context}
 
 Format the output as JSON following this schema:
 {json_format}
 """
 
 ANALYSIS_JSON_SCHEMA = r"""{
-    "functions": [{ 
-        "name": "function name", 
-        "description": "function description", 
-        "parameters": [ 
-            { 
-                "name": "param1", 
-                "type": "string", 
-                "description": "Description of param1", 
-                "required": true 
-            } 
-        ], 
-        "return_type": "string" 
-    }],
+    "operations": [
+        {
+            "op": "add",
+            "name": "function name",
+            "description": "function description",
+            "parameters": [
+                {
+                    "name": "param1",
+                    "type": "string",
+                    "description": "Description of param1",
+                    "required": true
+                }
+            ],
+            "return_type": "string"
+        },
+        {
+            "op": "update",
+            "id": "fn_xxxxxxxxxxxx",
+            "description": "refined description",
+            "parameters": [
+                {"name": "new_param", "type": "integer", "required": false}
+            ]
+        }
+    ],
     "is_complete": false,
     "next_cycle_focus": "guidance for what aspects to analyze in the next cycle"
 }"""
-
-# Formatting templates
-KNOWN_ITEMS_TEMPLATE = """Known Capabilities:
-{capabilities_str}
-
-Known Functions:
-{functions_str}"""

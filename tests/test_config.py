@@ -4,10 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from agent_interrogator.config import (
-    HuggingFaceConfig,
     InterrogationConfig,
     LLMConfig,
     ModelProvider,
+    OllamaConfig,
+    OpenAICompatibleConfig,
     OutputMode,
 )
 
@@ -32,28 +33,30 @@ class TestLLMConfig:
         )
         assert config.api_key is None
 
-    def test_huggingface_config_valid(self):
-        """Test valid HuggingFace configuration."""
-        config = LLMConfig(
-            provider=ModelProvider.HUGGINGFACE, model_name="mistralai/Mistral-7B-v0.1"
-        )
-        assert config.provider == ModelProvider.HUGGINGFACE
-        assert config.model_name == "mistralai/Mistral-7B-v0.1"
-        assert config.api_key is None  # Not required for HF
+    def test_ollama_config_valid(self):
+        """Test valid Ollama configuration."""
+        config = LLMConfig(provider=ModelProvider.OLLAMA, model_name="llama3.2:latest")
+        assert config.provider == ModelProvider.OLLAMA
+        assert config.model_name == "llama3.2:latest"
+        assert config.api_key is None  # Not required for Ollama
 
-    def test_huggingface_with_options(self):
-        """Test HuggingFace configuration with additional options."""
-        hf_config = HuggingFaceConfig(
-            device="cuda", quantization="fp16", allow_download=False
+    def test_ollama_with_options(self):
+        """Test Ollama configuration with additional options."""
+        ollama_config = OllamaConfig(
+            host="http://localhost:11434",
+            timeout=180.0,
+            options={"temperature": 0.7, "top_p": 0.9},
+            keep_alive="10m",
         )
         config = LLMConfig(
-            provider=ModelProvider.HUGGINGFACE,
+            provider=ModelProvider.OLLAMA,
             model_name="test-model",
-            huggingface=hf_config,
+            ollama=ollama_config,
         )
-        assert config.huggingface.device == "cuda"
-        assert config.huggingface.quantization == "fp16"
-        assert config.huggingface.allow_download is False
+        assert config.ollama.host == "http://localhost:11434"
+        assert config.ollama.timeout == 180.0
+        assert config.ollama.options == {"temperature": 0.7, "top_p": 0.9}
+        assert config.ollama.keep_alive == "10m"
 
     def test_model_kwargs(self):
         """Test model kwargs are properly stored."""
@@ -65,6 +68,49 @@ class TestLLMConfig:
         )
         assert config.model_kwargs["temperature"] == 0.7
         assert config.model_kwargs["max_tokens"] == 2000
+
+    def test_openai_compatible_config_valid(self):
+        """Test valid OpenAI-compatible configuration."""
+        compat_config = OpenAICompatibleConfig(
+            base_url="http://localhost:8000/v1",
+            api_key="test-key",
+            timeout=180.0,
+        )
+        config = LLMConfig(
+            provider=ModelProvider.OPENAI_COMPATIBLE,
+            model_name="local-model",
+            openai_compatible=compat_config,
+        )
+        assert config.provider == ModelProvider.OPENAI_COMPATIBLE
+        assert config.model_name == "local-model"
+        assert config.openai_compatible.base_url == "http://localhost:8000/v1"
+        assert config.openai_compatible.api_key == "test-key"
+        assert config.openai_compatible.timeout == 180.0
+
+    def test_openai_compatible_config_defaults(self):
+        """Test OpenAI-compatible config with default values."""
+        compat_config = OpenAICompatibleConfig(
+            base_url="http://localhost:1234/v1",
+        )
+        assert compat_config.api_key == "not-required"
+        assert compat_config.timeout == 120.0
+
+    def test_openai_compatible_from_dict(self):
+        """Test creating OpenAI-compatible config from dictionary."""
+        config_dict = {
+            "llm": {
+                "provider": "openai_compatible",
+                "model_name": "my-model",
+                "openai_compatible": {
+                    "base_url": "https://my-endpoint.com/v1",
+                    "api_key": "my-api-key",
+                },
+            },
+        }
+        config = InterrogationConfig.model_validate(config_dict)
+        assert config.llm.provider == ModelProvider.OPENAI_COMPATIBLE
+        assert config.llm.openai_compatible.base_url == "https://my-endpoint.com/v1"
+        assert config.llm.openai_compatible.api_key == "my-api-key"
 
 
 class TestInterrogationConfig:
