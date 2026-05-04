@@ -3,7 +3,16 @@
 import json
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    cast,
+)
 
 if TYPE_CHECKING:
     from .output import OutputManager
@@ -429,9 +438,12 @@ class OpenAILLM(LLMInterface):
             **self._default_openai_chat_kwargs(self.config.llm.model_name),
             **self.model_kwargs,
         }
+        # The OpenAI SDK types `messages` as a strict union of TypedDicts;
+        # our generic Dict[str, str] is structurally compatible but mypy
+        # can't prove it.
         response = await self.client.chat.completions.create(
             model=self.config.llm.model_name,
-            messages=messages,
+            messages=cast(Any, messages),
             **chat_kwargs,
         )
         content = response.choices[0].message.content
@@ -486,7 +498,7 @@ class OpenAICompatibleLLM(LLMInterface):
         }
         response = await self.client.chat.completions.create(
             model=self.config.llm.model_name,
-            messages=messages,
+            messages=cast(Any, messages),
             **chat_kwargs,
         )
         content = response.choices[0].message.content
@@ -529,6 +541,6 @@ class OllamaLLM(LLMInterface):
                 options=self.options,
                 keep_alive=self.keep_alive,
             )
-            return response["message"]["content"]
+            return str(response["message"]["content"])
         except ResponseError as e:
             raise ValueError(f"Ollama API error: {str(e)}")
