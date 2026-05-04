@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ModelProvider.OLLAMA` provider with `OllamaConfig` (host, timeout, generation options, keep-alive) for running interrogation against a local Ollama daemon.
 - `ModelProvider.OPENAI_COMPATIBLE` provider with `OpenAICompatibleConfig` (base_url, api_key, timeout) for any OpenAI-shaped Chat Completions endpoint (vLLM, LM Studio, LocalAI, custom gateways, etc.).
 - `OpenAIConfig` with optional `timeout`, exposed on `LLMConfig.openai`, for parity with the other providers.
+- Support for OpenAI's reasoning-class ("thinking") models — `gpt-5*`, `o1*`, `o3*`, `o4*` (case-insensitive) — auto-detected by name. The library skips its `temperature=0.1` default for these so the API uses the only sampling temperature they accept; no extra configuration needed.
 - Centralized JSON extraction in `LLMInterface._extract_json` with markdown code-block and regex fallbacks.
 - Stable `node_id` on `Capability` and `Function` (sha1 of normalized name + signature) — the foundation for forthcoming graph-backed storage analogous to BloodHound's `ObjectIdentifier`.
 - `merge.py` with field-level UPSERT helpers (`merge_capability`, `merge_function`, `merge_parameters`) — prefer-longer for descriptions, union parameters by `(name, type)`, first-seen-wins for metadata conflicts.
@@ -23,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Duplicate capability and function entries that previously appeared when the agent re-described the same tool across cycles. The interrogator now merges into the existing record (richer description + unioned parameters) instead of inserting a second entry.
+- `OpenAILLM._chat` and `OpenAICompatibleLLM._chat` now build their kwargs as `{...defaults, **model_kwargs}` so callers can override sampling parameters via `LLMConfig.model_kwargs`. The previous code passed `temperature=0.1` ahead of `**model_kwargs`, which both prevented overrides and would raise `TypeError` on duplicate kwargs.
+- OpenAI reasoning-class model names (`gpt-5*`, `o1*`, `o3*`, `o4*`, case-insensitive) are auto-detected and the `temperature=0.1` default is omitted so the API falls back to the required default of 1.0. Eliminates the `400 BadRequestError: temperature does not support 0.1 with this model` error without requiring any config changes from the caller.
+- `LLMInterface.generate_prompt` follow-up discovery branch handled `Capability` Pydantic objects (the v0.2.0 internal shape) as well as legacy dicts; previously it called `.get("name")` and crashed on cycle ≥ 1 with `AttributeError`.
 
 ## [0.1.1] - 2025-07-27
 - Requirements update

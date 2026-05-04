@@ -1,8 +1,16 @@
 """LLM interface implementations."""
 
 import json
+import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
+
+# OpenAI reasoning-class models (gpt-5.x, o1, o3, o4, future o-series) only
+# accept the default sampling temperature (1.0). Sending the library's usual
+# 0.1 default produces a 400 BadRequestError. We detect them by name prefix
+# and let the model use its own default unless the caller overrides via
+# LLMConfig.model_kwargs.
+_OPENAI_FIXED_TEMPERATURE_PATTERN = re.compile(r"^(gpt-5|o\d)", re.IGNORECASE)
 
 if TYPE_CHECKING:
     from .output import OutputManager
@@ -134,9 +142,21 @@ class LLMInterface(ABC):
             discovered = context.get("discovered_capabilities", [])
             next_focus = context.get("next_cycle_focus")
 
+            # ``discovered`` may contain either Pydantic Capability instances
+            # (the v0.2.0 path from interrogator._discover_capabilities) or
+            # plain dicts (legacy/test callers). Handle both.
+            def _name(cap: Any) -> str:
+                return getattr(cap, "name", None) or (
+                    cap.get("name", "") if isinstance(cap, dict) else ""
+                )
+
+            def _desc(cap: Any) -> str:
+                return getattr(cap, "description", None) or (
+                    cap.get("description", "") if isinstance(cap, dict) else ""
+                )
+
             capabilities_str = "\n".join(
-                f"- {cap.get('name', '')}: {cap.get('description', '')}"
-                for cap in discovered
+                f"- {_name(cap)}: {_desc(cap)}" for cap in discovered
             )
 
             interrogation_prompt_request = DISCOVERY_PROMPT_TEMPLATE.format(
@@ -362,6 +382,19 @@ class LLMInterface(ABC):
 
         return True
 
+    @staticmethod
+    def _default_openai_chat_kwargs(model_name: Optional[str]) -> Dict[str, Any]:
+        """Pick the right baseline chat kwargs for an OpenAI-shaped client.
+
+        Returns ``{"temperature": 0.1}`` for legacy chat models (deterministic
+        extraction), and ``{}`` for reasoning-class models (gpt-5.x, o1, o3,
+        o4) that reject any non-default temperature with a 400 error. Callers
+        always retain final say through ``LLMConfig.model_kwargs``.
+        """
+        if model_name and _OPENAI_FIXED_TEMPERATURE_PATTERN.match(model_name):
+            return {}
+        return {"temperature": 0.1}
+
 
 class OpenAILLM(LLMInterface):
     """OpenAI-based LLM implementation."""
@@ -380,12 +413,22 @@ class OpenAILLM(LLMInterface):
         self.model_kwargs = config.llm.model_kwargs
 
     async def _chat(self, messages: List[Dict[str, str]]) -> str:
-        """Send messages to OpenAI and return the response content."""
+        """Send messages to OpenAI and return the response content.
+
+        Default sampling is ``temperature=0.1`` for deterministic extraction
+        on legacy chat models. Reasoning-class models (gpt-5.x, o1, o3, o4)
+        are auto-detected by name and the temperature default is omitted so
+        they fall back to their required default of 1.0. ``LLMConfig.model_kwargs``
+        always overrides whatever the library picks.
+        """
+        chat_kwargs: Dict[str, Any] = {
+            **self._default_openai_chat_kwargs(self.config.llm.model_name),
+            **self.model_kwargs,
+        }
         response = await self.client.chat.completions.create(
             model=self.config.llm.model_name,
             messages=messages,
-            temperature=0.1,
-            **self.model_kwargs,
+            **chat_kwargs,
         )
         content = response.choices[0].message.content
         if content is None:
@@ -427,12 +470,20 @@ class OpenAICompatibleLLM(LLMInterface):
         self.output.print_verbose(f"Timeout: {compat_config.timeout}s")
 
     async def _chat(self, messages: List[Dict[str, str]]) -> str:
-        """Send messages to the OpenAI-compatible endpoint and return the response content."""
+        """Send messages to the OpenAI-compatible endpoint and return the response content.
+
+        Same auto-detection as ``OpenAILLM`` — reasoning-class model names get
+        the temperature default omitted. ``LLMConfig.model_kwargs`` always
+        overrides whatever the library picks.
+        """
+        chat_kwargs: Dict[str, Any] = {
+            **self._default_openai_chat_kwargs(self.config.llm.model_name),
+            **self.model_kwargs,
+        }
         response = await self.client.chat.completions.create(
             model=self.config.llm.model_name,
             messages=messages,
-            temperature=0.1,
-            **self.model_kwargs,
+            **chat_kwargs,
         )
         content = response.choices[0].message.content
         if content is None:

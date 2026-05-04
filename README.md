@@ -61,7 +61,7 @@ from agent_interrogator import AgentInterrogator, InterrogationConfig, LLMConfig
 config = InterrogationConfig(
     llm=LLMConfig(
         provider=ModelProvider.OPENAI,
-        model_name="gpt-4",
+        model_name="gpt-4.1",
         api_key="your-openai-api-key"
     ),
     max_iterations=5
@@ -149,13 +149,23 @@ from agent_interrogator import InterrogationConfig, LLMConfig, ModelProvider, Ou
 config = InterrogationConfig(
     llm=LLMConfig(
         provider=ModelProvider.OPENAI,
-        model_name="gpt-4",
+        model_name="gpt-4.1",
         api_key="your-openai-api-key"
     ),
     max_iterations=5,  # Maximum discovery cycles
     output_mode=OutputMode.STANDARD  # QUIET, STANDARD, or VERBOSE
 )
 ```
+
+> **Optional:** pass `openai=OpenAIConfig(timeout=180.0)` on `LLMConfig` if you
+> want to override the OpenAI client's default request timeout. Provider parity
+> with `OllamaConfig` and `OpenAICompatibleConfig`, which both expose `timeout`.
+
+> **Newer OpenAI reasoning models (gpt-5.x, o1, o3, o4):** auto-detected by
+> name prefix — the library omits its default `temperature=0.1` for these so
+> they fall back to the only value they accept (1.0). No config changes
+> needed. To force a temperature anyway (or override for any model), pass
+> `model_kwargs={"temperature": ...}` on `LLMConfig`.
 
 ### Ollama Configuration (local models)
 
@@ -287,20 +297,38 @@ profile = await interrogator.interrogate()
 
 # Iterate through capabilities
 for capability in profile.capabilities:
-    print(f"Capability: {capability.name}")
+    print(f"Capability: {capability.name}  [{capability.node_id}]")
     print(f"Description: {capability.description}")
-    
+
     for function in capability.functions:
-        print(f"  Function: {function.name}")
+        print(f"  Function: {function.name}  [{function.node_id}]")
         print(f"  Description: {function.description}")
         print(f"  Return Type: {function.return_type}")
-        
+
         for param in function.parameters:
             print(f"    Parameter: {param.name}")
             print(f"    Type: {param.type}")
             print(f"    Required: {param.required}")
             print(f"    Default: {param.default}")
 ```
+
+### Identity & Deduplication
+
+Each `Capability` and `Function` carries a stable, content-addressed `node_id`
+(`cap_<sha1[:12]>` / `fn_<sha1[:12]>`) derived from a normalized form of its
+name and — for functions — its parameter signature and return type.
+
+The interrogation loop UPSERTs by `node_id`: when the target re-describes a
+tool across cycles (often with slightly different wording), the entries are
+merged into a single record rather than appended as duplicates. Field-level
+merge keeps the richer description, unions parameter lists by `(name, type)`,
+and treats `required=True` as sticky. The loop also short-circuits once a
+cycle produces no new or updated entries.
+
+Stable `node_id`s mean profiles can be diffed across runs (or across agent
+versions) by joining on identity, and lay the groundwork for a forthcoming
+graph-backed storage mode analogous to BloodHound's
+`MERGE`-by-`ObjectIdentifier` ingestion.
 
 ### Security Research Applications
 
@@ -349,9 +377,10 @@ flake8 src/ tests/
 agent-interrogator/
 ├── src/agent_interrogator/    # Main package
 │   ├── __init__.py           # Public API
-│   ├── interrogator.py       # Core interrogation logic
+│   ├── interrogator.py       # Core interrogation loop (UPSERT by node_id)
 │   ├── config.py             # Configuration models
 │   ├── llm.py                # LLM provider interfaces
+│   ├── merge.py              # Field-level UPSERT helpers
 │   ├── models.py             # Data models (AgentProfile, etc.)
 │   ├── output.py             # Terminal output management
 │   └── prompt_templates.py   # LLM prompts

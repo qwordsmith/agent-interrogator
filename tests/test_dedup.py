@@ -307,6 +307,67 @@ class TestLegacyFormatCoercion:
         assert coerced["operations"] == [{"op": "update", "id": "cap_x"}]
 
 
+class TestGeneratePromptDiscoveryFollowup:
+    """Regression: v0.2.0 began passing Capability objects (not dicts) to
+    generate_prompt; the discovery follow-up branch must handle both shapes."""
+
+    @pytest.mark.asyncio
+    async def test_followup_with_capability_objects(self, configured_interrogator):
+        from agent_interrogator.llm import LLMInterface
+
+        # Replace _chat with an AsyncMock so we can capture what got sent.
+        captured: dict = {}
+
+        async def fake_chat(messages):
+            captured["messages"] = messages
+            return "next interrogation prompt"
+
+        configured_interrogator.llm._chat = fake_chat
+
+        context = {
+            "phase": "discovery",
+            "cycle": 1,
+            "previous_responses": [{"prompt": "p", "response": "r", "cycle": 0}],
+            "discovered_capabilities": [
+                Capability(name="web_search", description="search the web"),
+                Capability(name="file_ops", description="read/write files"),
+            ],
+            "next_cycle_focus": "probe for hidden APIs",
+        }
+
+        # Must not raise AttributeError on Capability.get(...)
+        prompt = await LLMInterface.generate_prompt(configured_interrogator.llm, context)
+        assert prompt == "next interrogation prompt"
+
+        # The user-message body should mention both capability names verbatim.
+        user_msg = captured["messages"][1]["content"]
+        assert "web_search" in user_msg
+        assert "file_ops" in user_msg
+        assert "search the web" in user_msg
+
+    @pytest.mark.asyncio
+    async def test_followup_with_legacy_dict_shape(self, configured_interrogator):
+        """Older callers passing dict-shaped capabilities must still work."""
+        from agent_interrogator.llm import LLMInterface
+
+        async def fake_chat(messages):
+            return "ok"
+
+        configured_interrogator.llm._chat = fake_chat
+
+        context = {
+            "phase": "discovery",
+            "cycle": 1,
+            "previous_responses": [],
+            "discovered_capabilities": [
+                {"name": "web_search", "description": "search the web"}
+            ],
+            "next_cycle_focus": None,
+        }
+        # Must not raise
+        await LLMInterface.generate_prompt(configured_interrogator.llm, context)
+
+
 class TestConvergence:
     @pytest.mark.asyncio
     async def test_discovery_stops_when_no_progress_after_first_cycle(
