@@ -296,9 +296,7 @@ class AgentInterrogator:
                     )
 
                 if "name" not in op_data:
-                    self.output.print(
-                        f"[red]Skipping op without name: {op_data}[/red]"
-                    )
+                    self.output.print(f"[red]Skipping op without name: {op_data}[/red]")
                     continue
                 new_cap = self._build_capability(op_data)
                 if new_cap.node_id in capabilities_by_id:
@@ -324,7 +322,9 @@ class AgentInterrogator:
         cycle = 0
         previous_responses: List[Dict[str, Any]] = []
         # Seed the catalog with anything already on the capability
-        functions_by_id: Dict[str, Function] = {f.node_id: f for f in capability.functions}
+        functions_by_id: Dict[str, Function] = {
+            f.node_id: f for f in capability.functions
+        }
         result: Dict[str, Any] = {}
 
         while cycle < self.config.max_iterations:
@@ -404,9 +404,7 @@ class AgentInterrogator:
             elif isinstance(param, str):
                 if ":" in param:
                     name, ptype = param.split(":", 1)
-                    normalized.append(
-                        Parameter(name=name.strip(), type=ptype.strip())
-                    )
+                    normalized.append(Parameter(name=name.strip(), type=ptype.strip()))
                 else:
                     normalized.append(Parameter(name=param.strip(), type="string"))
         return normalized

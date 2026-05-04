@@ -27,9 +27,7 @@ def function_signature(
     """Stable signature string used to derive a function's content-addressed id."""
     norm_name = normalize_name(name)
     param_sig = ",".join(
-        sorted(
-            f"{normalize_name(p.name)}:{normalize_name(p.type)}" for p in parameters
-        )
+        sorted(f"{normalize_name(p.name)}:{normalize_name(p.type)}" for p in parameters)
     )
     return f"{norm_name}|{param_sig}|{normalize_name(return_type or '')}"
 

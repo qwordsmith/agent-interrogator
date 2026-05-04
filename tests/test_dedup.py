@@ -106,7 +106,9 @@ class TestMergeParameters:
 
     def test_collision_prefers_richer_description(self):
         a = [Parameter(name="x", type="string", description="short")]
-        b = [Parameter(name="x", type="string", description="a much longer description")]
+        b = [
+            Parameter(name="x", type="string", description="a much longer description")
+        ]
         merged = merge_parameters(a, b)
         assert len(merged) == 1
         assert merged[0].description == "a much longer description"
@@ -190,7 +192,11 @@ class TestCapabilityOperationsHandler:
 
         # Same name re-added should merge into the existing entry, not duplicate.
         ops_second = [
-            {"op": "add", "name": "Web Search", "description": "a much longer description"}
+            {
+                "op": "add",
+                "name": "Web Search",
+                "description": "a much longer description",
+            }
         ]
         added, updated = configured_interrogator._apply_capability_operations(
             catalog, ops_second
@@ -208,7 +214,13 @@ class TestCapabilityOperationsHandler:
         target_id = next(iter(catalog))
         added, updated = configured_interrogator._apply_capability_operations(
             catalog,
-            [{"op": "update", "id": target_id, "description": "much fuller description"}],
+            [
+                {
+                    "op": "update",
+                    "id": target_id,
+                    "description": "much fuller description",
+                }
+            ],
         )
         assert added == [] and updated == [target_id]
         assert catalog[target_id].description == "much fuller description"
@@ -336,7 +348,9 @@ class TestGeneratePromptDiscoveryFollowup:
         }
 
         # Must not raise AttributeError on Capability.get(...)
-        prompt = await LLMInterface.generate_prompt(configured_interrogator.llm, context)
+        prompt = await LLMInterface.generate_prompt(
+            configured_interrogator.llm, context
+        )
         assert prompt == "next interrogation prompt"
 
         # The user-message body should mention both capability names verbatim.
@@ -385,7 +399,11 @@ class TestConvergence:
         ]
 
         async def fake_process_response(response, context):
-            return responses.pop(0) if responses else {"operations": [], "is_complete": False}
+            return (
+                responses.pop(0)
+                if responses
+                else {"operations": [], "is_complete": False}
+            )
 
         async def fake_generate_prompt(context):
             return "prompt"

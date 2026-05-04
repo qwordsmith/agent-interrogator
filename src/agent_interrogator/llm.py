@@ -5,13 +5,6 @@ import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
-# OpenAI reasoning-class models (gpt-5.x, o1, o3, o4, future o-series) only
-# accept the default sampling temperature (1.0). Sending the library's usual
-# 0.1 default produces a 400 BadRequestError. We detect them by name prefix
-# and let the model use its own default unless the caller overrides via
-# LLMConfig.model_kwargs.
-_OPENAI_FIXED_TEMPERATURE_PATTERN = re.compile(r"^(gpt-5|o\d)", re.IGNORECASE)
-
 if TYPE_CHECKING:
     from .output import OutputManager
 
@@ -40,6 +33,13 @@ from .prompt_templates import (  # Discovery templates; Analysis templates; Proc
     INITIAL_DISCOVERY_PROMPT,
 )
 
+# OpenAI reasoning-class models (gpt-5.x, o1, o3, o4, future o-series) only
+# accept the default sampling temperature (1.0). Sending the library's usual
+# 0.1 default produces a 400 BadRequestError. We detect them by name prefix
+# and let the model use its own default unless the caller overrides via
+# LLMConfig.model_kwargs.
+_OPENAI_FIXED_TEMPERATURE_PATTERN = re.compile(r"^(gpt-5|o\d)", re.IGNORECASE)
+
 
 class LLMInterface(ABC):
     """Abstract base class for LLM implementations."""
@@ -66,7 +66,9 @@ class LLMInterface(ABC):
         """
         pass
 
-    def _extract_json(self, text: str, required_key: Optional[str] = None) -> Dict[str, Any]:
+    def _extract_json(
+        self, text: str, required_key: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Extract and parse JSON from text, handling various formats.
 
         Args:
@@ -191,7 +193,7 @@ class LLMInterface(ABC):
     @staticmethod
     def _format_known_capabilities(capabilities: List[Any]) -> str:
         if not capabilities:
-            return "(none yet — every extracted capability should be op=\"add\")"
+            return '(none yet — every extracted capability should be op="add")'
         lines = []
         for cap in capabilities:
             node_id = getattr(cap, "node_id", "") or ""
@@ -203,7 +205,7 @@ class LLMInterface(ABC):
     @staticmethod
     def _format_known_functions(functions: List[Any]) -> str:
         if not functions:
-            return "(none yet — every extracted function should be op=\"add\")"
+            return '(none yet — every extracted function should be op="add")'
         lines = []
         for fn in functions:
             node_id = getattr(fn, "node_id", "") or ""
@@ -270,7 +272,9 @@ class LLMInterface(ABC):
         content = await self._chat(messages)
 
         try:
-            return self._coerce_to_operations(self._extract_json(content), "capabilities")
+            return self._coerce_to_operations(
+                self._extract_json(content), "capabilities"
+            )
         except ValueError:
             self.output.print_verbose(
                 "[yellow]First attempt failed, trying again with explicit JSON formatting[/yellow]"
@@ -503,7 +507,9 @@ class OllamaLLM(LLMInterface):
         ollama_config = config.llm.ollama or OllamaConfig()
 
         # Initialize the async client
-        self.client = AsyncClient(host=ollama_config.host, timeout=ollama_config.timeout)
+        self.client = AsyncClient(
+            host=ollama_config.host, timeout=ollama_config.timeout
+        )
         self.model_name = config.llm.model_name
         self.options = {"temperature": 0.1, **ollama_config.options}
         self.keep_alive = ollama_config.keep_alive

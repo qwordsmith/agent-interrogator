@@ -35,9 +35,7 @@ class TestLLMConfig:
 
     def test_ollama_config_valid(self):
         """Test valid Ollama configuration."""
-        config = LLMConfig(
-            provider=ModelProvider.OLLAMA, model_name="llama3.2:latest"
-        )
+        config = LLMConfig(provider=ModelProvider.OLLAMA, model_name="llama3.2:latest")
         assert config.provider == ModelProvider.OLLAMA
         assert config.model_name == "llama3.2:latest"
         assert config.api_key is None  # Not required for Ollama
