@@ -9,6 +9,7 @@ from agent_interrogator import (
     InterrogationConfig,
     LLMConfig,
     ModelProvider,
+    OpenAICompatibleConfig,
     OutputMode,
 )
 from agent_interrogator.models import AgentProfile, Capability, Function, Parameter
@@ -55,17 +56,38 @@ class TestAgentInterrogator:
                 mock_openai.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_llm_initialization_huggingface(self, mock_callback):
-        """Test HuggingFace LLM initialization."""
+    async def test_llm_initialization_ollama(self, mock_callback):
+        """Test Ollama LLM initialization."""
         config = InterrogationConfig(
-            llm=LLMConfig(provider=ModelProvider.HUGGINGFACE, model_name="test-model"),
+            llm=LLMConfig(provider=ModelProvider.OLLAMA, model_name="llama3.2:latest"),
             output_mode=OutputMode.QUIET,
         )
 
         with patch("agent_interrogator.interrogator.OutputManager"):
-            with patch("agent_interrogator.interrogator.HuggingFaceLLM") as mock_hf:
+            with patch("agent_interrogator.interrogator.OllamaLLM") as mock_ollama:
                 interrogator = AgentInterrogator(config, mock_callback)
-                mock_hf.assert_called_once()
+                mock_ollama.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_llm_initialization_openai_compatible(self, mock_callback):
+        """Test OpenAI-compatible LLM initialization."""
+        config = InterrogationConfig(
+            llm=LLMConfig(
+                provider=ModelProvider.OPENAI_COMPATIBLE,
+                model_name="local-model",
+                openai_compatible=OpenAICompatibleConfig(
+                    base_url="http://localhost:8000/v1",
+                ),
+            ),
+            output_mode=OutputMode.QUIET,
+        )
+
+        with patch("agent_interrogator.interrogator.OutputManager"):
+            with patch(
+                "agent_interrogator.interrogator.OpenAICompatibleLLM"
+            ) as mock_compat:
+                interrogator = AgentInterrogator(config, mock_callback)
+                mock_compat.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_display_profile(self, basic_config, mock_callback):

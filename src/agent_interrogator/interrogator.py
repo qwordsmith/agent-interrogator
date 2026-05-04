@@ -7,7 +7,8 @@ from rich.table import Table
 from rich.text import Text
 
 from .config import InterrogationConfig, ModelProvider
-from .llm import HuggingFaceLLM, LLMInterface, OpenAILLM
+from .llm import LLMInterface, OllamaLLM, OpenAICompatibleLLM, OpenAILLM
+from .merge import merge_capability, merge_function
 from .models import AgentProfile, Capability, Function, Parameter
 from .output import OutputManager
 
@@ -80,8 +81,10 @@ class AgentInterrogator:
         """Initialize the appropriate LLM based on configuration."""
         if self.config.llm.provider == ModelProvider.OPENAI:
             return OpenAILLM(self.config, self.output)
-        elif self.config.llm.provider == ModelProvider.HUGGINGFACE:
-            return HuggingFaceLLM(self.config, self.output)
+        elif self.config.llm.provider == ModelProvider.OLLAMA:
+            return OllamaLLM(self.config, self.output)
+        elif self.config.llm.provider == ModelProvider.OPENAI_COMPATIBLE:
+            return OpenAICompatibleLLM(self.config, self.output)
         else:
             raise ValueError(f"Unsupported LLM provider: {self.config.llm.provider}")
 
@@ -152,8 +155,12 @@ class AgentInterrogator:
         return self.profile
 
     async def _discover_capabilities(self) -> list[Capability]:
-        """Discover high-level capabilities of the agent through multiple cycles."""
-        discovered_capabilities: List[Capability] = []
+        """Discover high-level capabilities of the agent through multiple cycles.
+
+        Uses UPSERT semantics keyed on ``Capability.node_id`` so that re-discovery
+        across cycles merges into the existing entry rather than producing duplicates.
+        """
+        capabilities_by_id: Dict[str, Capability] = {}
         cycle = 0
         previous_responses: List[Dict[str, Any]] = []
         result: Dict[str, Any] = {}
@@ -163,9 +170,7 @@ class AgentInterrogator:
                 "phase": "discovery",
                 "cycle": cycle,
                 "previous_responses": previous_responses,
-                "discovered_capabilities": [
-                    cap.model_dump() for cap in discovered_capabilities
-                ],
+                "discovered_capabilities": list(capabilities_by_id.values()),
                 "next_cycle_focus": (
                     result.get("next_cycle_focus") if cycle > 0 else None
                 ),
@@ -205,20 +210,31 @@ class AgentInterrogator:
             # Process response
             result = await self.llm.process_response(response, context)
 
-            # Add new capabilities with validation
-            new_capabilities = []
-            for cap in result.get("capabilities", []):
-                if isinstance(cap, dict) and "name" in cap and "description" in cap:
-                    try:
-                        new_capabilities.append(Capability(**cap))
-                    except Exception as e:
-                        self.output.print(f"[red]Error creating capability: {e}[/red]")
-                else:
-                    self.output.print(f"[red]Invalid capability format: {cap}[/red]")
-            discovered_capabilities.extend(new_capabilities)
+            # Apply add/update operations against the running catalog
+            added_ids, updated_ids = self._apply_capability_operations(
+                capabilities_by_id, result.get("operations", [])
+            )
+            made_progress = bool(added_ids or updated_ids)
+
+            if added_ids:
+                self.output.display_status(
+                    f"Discovery cycle {cycle + 1}: added {len(added_ids)} new capabilities"
+                )
+            if updated_ids:
+                self.output.display_status(
+                    f"Discovery cycle {cycle + 1}: refined {len(updated_ids)} existing capabilities"
+                )
 
             # Check if we should continue discovery
             should_continue = await self.llm.should_continue_cycle(result)
+            if cycle > 0 and not made_progress:
+                # Convergence: cycle yielded no adds or updates -> nothing more to learn
+                self.output.display_status(
+                    f"Discovery cycle {cycle + 1}: no new or updated capabilities — converged",
+                    "bold yellow",
+                )
+                should_continue = False
+
             self.output.print(
                 f"[yellow]Discovery cycle {cycle + 1} complete. is_complete={result.get('is_complete', False)}[/yellow]"
             )
@@ -230,106 +246,135 @@ class AgentInterrogator:
 
             cycle += 1
 
-        return discovered_capabilities
+        return list(capabilities_by_id.values())
+
+    def _build_capability(self, op_data: Dict[str, Any]) -> Capability:
+        """Construct a Capability from an op dict, omitting unknown keys."""
+        allowed = {"name", "description", "metadata"}
+        payload = {k: v for k, v in op_data.items() if k in allowed and v is not None}
+        return Capability(**payload)
+
+    def _apply_capability_operations(
+        self,
+        capabilities_by_id: Dict[str, Capability],
+        operations: List[Any],
+    ) -> "tuple[List[str], List[str]]":
+        """Apply add/update operations to the running capability catalog.
+
+        Returns ``(added_ids, updated_ids)`` for progress reporting and convergence.
+        An ``update`` for an unknown id degrades gracefully to an ``add``.
+        """
+        added_ids: List[str] = []
+        updated_ids: List[str] = []
+
+        for op_data in operations:
+            if not isinstance(op_data, dict):
+                self.output.print(f"[red]Invalid operation entry: {op_data}[/red]")
+                continue
+
+            op = (op_data.get("op") or "add").lower()
+            try:
+                if op == "update":
+                    target_id = op_data.get("id")
+                    if target_id and target_id in capabilities_by_id:
+                        existing = capabilities_by_id[target_id]
+                        # Build a patch capability inheriting the existing identity
+                        patch = Capability(
+                            node_id=target_id,
+                            name=op_data.get("name") or existing.name,
+                            description=op_data.get("description"),
+                            metadata=op_data.get("metadata") or {},
+                        )
+                        capabilities_by_id[target_id] = merge_capability(
+                            existing, patch
+                        )
+                        updated_ids.append(target_id)
+                        continue
+                    # Unknown id: fall through to add-by-content semantics
+                    self.output.print_verbose(
+                        f"[yellow]Update for unknown id {target_id!r}; treating as add[/yellow]"
+                    )
+
+                if "name" not in op_data:
+                    self.output.print(
+                        f"[red]Skipping op without name: {op_data}[/red]"
+                    )
+                    continue
+                new_cap = self._build_capability(op_data)
+                if new_cap.node_id in capabilities_by_id:
+                    capabilities_by_id[new_cap.node_id] = merge_capability(
+                        capabilities_by_id[new_cap.node_id], new_cap
+                    )
+                    updated_ids.append(new_cap.node_id)
+                else:
+                    capabilities_by_id[new_cap.node_id] = new_cap
+                    added_ids.append(new_cap.node_id)
+            except Exception as e:  # noqa: BLE001 - surface to user, keep loop alive
+                self.output.print(f"[red]Error applying operation {op}: {e}[/red]")
+
+        return added_ids, updated_ids
 
     async def _analyze_capability(self, capability: Capability) -> List[Function]:
-        """Analyze a specific capability in detail through multiple cycles."""
+        """Analyze a specific capability in detail through multiple cycles.
+
+        Uses UPSERT semantics keyed on ``Function.node_id`` so that re-discovery
+        across cycles merges into the existing function record. The ``capability``
+        argument's ``functions`` list is rebuilt from the merged catalog at the end.
+        """
         cycle = 0
         previous_responses: List[Dict[str, Any]] = []
-        discovered_functions: List[Function] = []
+        # Seed the catalog with anything already on the capability
+        functions_by_id: Dict[str, Function] = {f.node_id: f for f in capability.functions}
         result: Dict[str, Any] = {}
 
         while cycle < self.config.max_iterations:
-            # Build context with Pydantic models directly
             context = {
                 "phase": "analysis",
                 "cycle": cycle,
                 "previous_responses": previous_responses,
-                "capability": capability,  # Use Pydantic model directly
-                "discovered_functions": discovered_functions,  # Use list of Pydantic models
+                "capability": capability,
+                "discovered_functions": list(functions_by_id.values()),
                 "next_cycle_focus": (
                     result.get("next_cycle_focus") if cycle > 0 else None
                 ),
             }
 
-            # Generate and send prompt
             prompt = await self.llm.generate_prompt(context)
-
-            # Display the prompt being sent
             self.output.display_prompt(prompt, cycle + 1, capability.name)
 
-            # Get response from agent
             response = await self.agent_callback(prompt)
-
-            # Display the response received
             self.output.display_response(response, cycle + 1, capability.name)
 
-            # Store the prompt/response pair in conversation history
             previous_responses.append(
                 {"prompt": prompt, "response": response, "cycle": cycle}
             )
 
-            # Process the response
             result = await self.llm.process_response(response, context)
 
-            # Extract discovered functions with validation
-            new_functions = []
-            for func_data in result.get("functions", []):
-                try:
-                    # Ensure we have a dictionary copy to modify safely
-                    func_dict = (
-                        func_data.copy()
-                        if isinstance(func_data, dict)
-                        else func_data.dict()
-                    )
+            added_ids, updated_ids = self._apply_function_operations(
+                functions_by_id, result.get("operations", [])
+            )
+            made_progress = bool(added_ids or updated_ids)
 
-                    # Process parameters - convert all to Parameter objects
-                    if "parameters" in func_dict:
-                        normalized_params = []
-                        for param in func_dict["parameters"]:
-                            if isinstance(param, str):
-                                # Extract parameter type if specified in format "name: type"
-                                if ":" in param:
-                                    name, param_type = param.split(":", 1)
-                                    normalized_params.append(
-                                        Parameter(
-                                            name=name.strip(), type=param_type.strip()
-                                        )
-                                    )
-                                else:
-                                    normalized_params.append(
-                                        Parameter(
-                                            name=param.strip(),
-                                            type="string",  # Default to string if type not specified
-                                        )
-                                    )
-                            elif isinstance(param, dict):
-                                normalized_params.append(Parameter(**param))
-                            else:
-                                normalized_params.append(
-                                    param
-                                )  # Already a Parameter object
-                        func_dict["parameters"] = normalized_params
-
-                    new_functions.append(Function(**func_dict))
-                except Exception as e:
-                    self.output.print(f"[red]Error creating function: {e}[/red]")
-
-            # Add new functions to the capability and our tracking list
-            capability.functions.extend(new_functions)
-            discovered_functions.extend(new_functions)
-
-            # Display progress
-            if new_functions:
+            if added_ids:
                 self.output.display_status(
-                    f"Found {len(new_functions)} new functions in {capability.name}"
+                    f"Found {len(added_ids)} new functions in {capability.name}"
+                )
+            if updated_ids:
+                self.output.display_status(
+                    f"Refined {len(updated_ids)} existing functions in {capability.name}"
                 )
 
-            # Display process results in verbose mode
             self.output.display_process_result(result, cycle + 1, capability.name)
 
-            # Check if we should continue analysis
             should_continue = await self.llm.should_continue_cycle(result)
+            if cycle > 0 and not made_progress:
+                self.output.display_status(
+                    f"Analysis of {capability.name}: no new or updated functions — converged",
+                    "bold yellow",
+                )
+                should_continue = False
+
             self.output.display_status(
                 f"Analysis cycle {cycle + 1} complete. is_complete={result.get('is_complete', False)}"
             )
@@ -341,4 +386,99 @@ class AgentInterrogator:
 
             cycle += 1
 
-        return discovered_functions
+        # Rewrite the capability's function list from the merged catalog
+        capability.functions = list(functions_by_id.values())
+        return capability.functions
+
+    @staticmethod
+    def _normalize_parameters(raw_params: Any) -> List[Parameter]:
+        """Coerce LLM-emitted parameter entries into ``Parameter`` instances."""
+        if not isinstance(raw_params, list):
+            return []
+        normalized: List[Parameter] = []
+        for param in raw_params:
+            if isinstance(param, Parameter):
+                normalized.append(param)
+            elif isinstance(param, dict):
+                normalized.append(Parameter(**param))
+            elif isinstance(param, str):
+                if ":" in param:
+                    name, ptype = param.split(":", 1)
+                    normalized.append(
+                        Parameter(name=name.strip(), type=ptype.strip())
+                    )
+                else:
+                    normalized.append(Parameter(name=param.strip(), type="string"))
+        return normalized
+
+    def _build_function(self, op_data: Dict[str, Any]) -> Function:
+        """Construct a Function from an op dict, omitting unknown keys."""
+        payload: Dict[str, Any] = {}
+        if op_data.get("name"):
+            payload["name"] = op_data["name"]
+        if op_data.get("description") is not None:
+            payload["description"] = op_data["description"]
+        if op_data.get("return_type") is not None:
+            payload["return_type"] = op_data["return_type"]
+        if "parameters" in op_data:
+            payload["parameters"] = self._normalize_parameters(op_data["parameters"])
+        return Function(**payload)
+
+    def _apply_function_operations(
+        self,
+        functions_by_id: Dict[str, Function],
+        operations: List[Any],
+    ) -> "tuple[List[str], List[str]]":
+        """Apply add/update operations to the running function catalog.
+
+        Returns ``(added_ids, updated_ids)``. An update for an unknown id falls
+        back to add-by-content semantics so we never drop information.
+        """
+        added_ids: List[str] = []
+        updated_ids: List[str] = []
+
+        for op_data in operations:
+            if not isinstance(op_data, dict):
+                self.output.print(f"[red]Invalid operation entry: {op_data}[/red]")
+                continue
+
+            op = (op_data.get("op") or "add").lower()
+            try:
+                if op == "update":
+                    target_id = op_data.get("id")
+                    if target_id and target_id in functions_by_id:
+                        existing = functions_by_id[target_id]
+                        patch = Function(
+                            node_id=target_id,
+                            name=op_data.get("name") or existing.name,
+                            description=op_data.get("description"),
+                            parameters=self._normalize_parameters(
+                                op_data.get("parameters", [])
+                            ),
+                            return_type=op_data.get("return_type"),
+                        )
+                        functions_by_id[target_id] = merge_function(existing, patch)
+                        updated_ids.append(target_id)
+                        continue
+                    self.output.print_verbose(
+                        f"[yellow]Update for unknown id {target_id!r}; treating as add[/yellow]"
+                    )
+
+                if not op_data.get("name"):
+                    self.output.print(
+                        f"[red]Skipping function op without name: {op_data}[/red]"
+                    )
+                    continue
+                new_fn = self._build_function(op_data)
+                if new_fn.node_id in functions_by_id:
+                    functions_by_id[new_fn.node_id] = merge_function(
+                        functions_by_id[new_fn.node_id], new_fn
+                    )
+                    updated_ids.append(new_fn.node_id)
+                else:
+                    functions_by_id[new_fn.node_id] = new_fn
+                    added_ids.append(new_fn.node_id)
+            except Exception as e:  # noqa: BLE001 - surface to user, keep loop alive
+                self.output.print(f"[red]Error applying operation {op}: {e}[/red]")
+
+        return added_ids, updated_ids

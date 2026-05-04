@@ -3,16 +3,18 @@
 from typing import List
 
 from .config import (
-    HuggingFaceConfig,
     InterrogationConfig,
     LLMConfig,
     ModelProvider,
+    OllamaConfig,
+    OpenAICompatibleConfig,
+    OpenAIConfig,
     OutputMode,
 )
 from .interrogator import AgentInterrogator
 from .models import AgentProfile, Capability, Function, Parameter
 
-__version__: str = "0.1.0"
+__version__: str = "0.2.0"
 
 __all__: List[str] = [
     "AgentInterrogator",
@@ -24,5 +26,7 @@ __all__: List[str] = [
     "Function",
     "Parameter",
     "OutputMode",
-    "HuggingFaceConfig",
+    "OllamaConfig",
+    "OpenAICompatibleConfig",
+    "OpenAIConfig",
 ]

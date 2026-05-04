@@ -132,14 +132,14 @@ pip install -e .[dev]
 ### Requirements
 
 - **Python**: 3.9 or higher
-- **OpenAI API Key**: For using GPT models (optional, can use HuggingFace instead)
+- **OpenAI API Key**: For using GPT models (optional, can use Ollama or any OpenAI-compatible endpoint instead)
 - **Dependencies**: Automatically installed with pip
 
 ---
 
 ## Configuration
 
-Agent Interrogator supports using either OpenAI or local models for analyzing agent responses:
+Agent Interrogator supports OpenAI, a local Ollama daemon, or any OpenAI-compatible endpoint (vLLM, LM Studio, LocalAI, etc.) for analyzing agent responses:
 
 ### OpenAI Configuration
 
@@ -157,23 +157,47 @@ config = InterrogationConfig(
 )
 ```
 
-### Local Model (HuggingFace) Configuration
+### Ollama Configuration (local models)
 
 ```python
-from agent_interrogator import HuggingFaceConfig
+from agent_interrogator import OllamaConfig
 
 config = InterrogationConfig(
     llm=LLMConfig(
-        provider=ModelProvider.HUGGINGFACE,
-        model_name="mistralai/Mistral-7B-v0.1",  # Any HF model
-        huggingface=HuggingFaceConfig(
-            device="auto",  # auto, cpu, cuda, mps
-            quantization="fp16",  # fp16, int8, or None
-            allow_download=True
+        provider=ModelProvider.OLLAMA,
+        model_name="llama3.2:latest",  # Any model pulled into your Ollama daemon
+        ollama=OllamaConfig(
+            host="http://localhost:11434",
+            timeout=120.0,
+            options={"temperature": 0.1, "top_p": 0.9},
+            keep_alive="5m",
         )
     ),
     max_iterations=5,
     output_mode=OutputMode.VERBOSE
+)
+```
+
+### OpenAI-Compatible Endpoint Configuration
+
+Use this for any server that exposes an OpenAI-shaped Chat Completions API
+(vLLM, LM Studio, LocalAI, custom gateways, etc.).
+
+```python
+from agent_interrogator import OpenAICompatibleConfig
+
+config = InterrogationConfig(
+    llm=LLMConfig(
+        provider=ModelProvider.OPENAI_COMPATIBLE,
+        model_name="local-model",
+        openai_compatible=OpenAICompatibleConfig(
+            base_url="http://localhost:8000/v1",
+            api_key="not-required",  # Some endpoints ignore this
+            timeout=120.0,
+        )
+    ),
+    max_iterations=5,
+    output_mode=OutputMode.STANDARD
 )
 ```
 

@@ -10,7 +10,8 @@ class ModelProvider(str, Enum):
     """Supported LLM providers."""
 
     OPENAI = "openai"
-    HUGGINGFACE = "huggingface"
+    OLLAMA = "ollama"
+    OPENAI_COMPATIBLE = "openai_compatible"
 
 
 class OutputMode(str, Enum):
@@ -21,26 +22,50 @@ class OutputMode(str, Enum):
     VERBOSE = "verbose"  # Detailed prompts and responses
 
 
-class HuggingFaceConfig(BaseModel):
-    """HuggingFace-specific configuration options."""
+class OpenAIConfig(BaseModel):
+    """OpenAI-specific configuration options."""
 
-    local_model_path: Optional[str] = Field(
+    timeout: Optional[float] = Field(
         None,
-        description="Path to local model directory. If set, this will be used instead of model_name",
+        description="Request timeout in seconds (defaults to the openai SDK default)",
     )
-    allow_download: bool = Field(
-        True, description="Whether to allow downloading models from HuggingFace Hub"
+
+
+class OllamaConfig(BaseModel):
+    """Ollama-specific configuration options."""
+
+    host: str = Field(
+        "http://localhost:11434",
+        description="Ollama server URL",
     )
-    revision: Optional[str] = Field(
-        None, description="Model revision/tag to use (e.g., 'main')"
+    timeout: float = Field(
+        120.0,
+        description="Request timeout in seconds",
     )
-    device: str = Field(
-        "auto",
-        description="Device to place model on ('cpu', 'cuda', 'auto', 'ane'). 'ane' uses Apple Neural Engine on M1/M2/M3 Macs if available",
+    options: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Generation options (temperature, top_p, etc.)",
     )
-    quantization: Optional[str] = Field(
-        None,
-        description="Quantization method to use (e.g., 'int8', 'fp16', None for no quantization)",
+    keep_alive: str = Field(
+        "5m",
+        description="How long to keep model loaded",
+    )
+
+
+class OpenAICompatibleConfig(BaseModel):
+    """Configuration for custom OpenAI-compatible API endpoints."""
+
+    base_url: str = Field(
+        ...,
+        description="Base URL for the OpenAI-compatible API endpoint (e.g., http://localhost:8000/v1)",
+    )
+    api_key: str = Field(
+        "not-required",
+        description="API key for the endpoint (some endpoints ignore this)",
+    )
+    timeout: float = Field(
+        120.0,
+        description="Request timeout in seconds",
     )
 
 
@@ -48,7 +73,8 @@ class LLMConfig(BaseModel):
     """Configuration for the LLM to be used for interrogation."""
 
     provider: ModelProvider = Field(
-        ..., description="The provider of the LLM (OpenAI or HuggingFace)"
+        ...,
+        description="The provider of the LLM (OpenAI, Ollama, or OpenAI-compatible)",
     )
     model_name: str = Field(..., description="Name of the model to use")
     api_key: Optional[str] = Field(
@@ -57,8 +83,14 @@ class LLMConfig(BaseModel):
     model_kwargs: Dict[str, Any] = Field(
         default_factory=dict, description="Additional model-specific parameters"
     )
-    huggingface: Optional[HuggingFaceConfig] = Field(
-        None, description="HuggingFace-specific configuration options"
+    openai: Optional[OpenAIConfig] = Field(
+        None, description="OpenAI-specific configuration options"
+    )
+    ollama: Optional[OllamaConfig] = Field(
+        None, description="Ollama-specific configuration options"
+    )
+    openai_compatible: Optional[OpenAICompatibleConfig] = Field(
+        None, description="Configuration for custom OpenAI-compatible endpoints"
     )
 
 
